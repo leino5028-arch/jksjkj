@@ -2,7 +2,7 @@ import os
 import json
 import time
 import telebot
-import threading  # Background delay ke liye zaroori hai
+import threading
 from dotenv import load_dotenv
 
 # ---------------- LOAD ----------------
@@ -29,12 +29,11 @@ def save_users(data):
 users = load_users()
 manual_mode = {}
 
-# ---------------- AUTO MESSAGE FUNCTION ----------------
+# ---------------- AUTO MESSAGE FUNCTION (3999 Rs) ----------------
 def auto_send_bank_offer(uid):
-    """1-2 minute baad automatic message bhejne ke liye"""
-    time.sleep(90) # 1.5 minute ka wait
-    
-    # Check karein ki user abhi bhi usi step par hai ya nahi
+    """1.5 minute baad automatic message bhejega"""
+    time.sleep(90) 
+    # Check karein ki user abhi bhi usi step par hai
     if users.get(uid, {}).get("step") == "wait_for_bank":
         msg = ("✅ **Bank Details Available:**\n\n"
                "Your reactivation fee is **3999Rs**. "
@@ -69,13 +68,11 @@ def get_step_reply(uid, text):
     elif any(x in msg for x in ["oke", "okay", "ok", "kaha karna hai", "where to pay"]):
         users[uid]["step"] = "wait_for_bank"
         save_users(users)
-        
-        # Background mein timer start karein (1.5 min baad message jayega)
+        # Background timer start (1.5 min)
         threading.Thread(target=auto_send_bank_offer, args=(uid,)).start()
-        
         return "Please stay active. We will provide our official **Bank Details** as soon as they are available. Please keep your notifications on."
 
-    # Step 5: User asks for details after auto-message
+    # Step 5: User asks for bank details (After auto-message)
     elif any(x in msg for x in ["bank details provide", "send details", "bank details send karo", "detels"]):
         users[uid]["step"] = "request_sent"
         save_users(users)
@@ -85,12 +82,6 @@ def get_step_reply(uid, text):
     elif any(x in msg for x in ["nahi de sakta", "no money", "paise nahi hai", "nahi kar sakta", "mana"]):
         return "Agar aap activation fee pay nahi kar sakte, toh aapko manually Tgpay application se ja kar orders monitor karne honge aur wahan se order buy karna hoga."
 
-    # Step 7: Payment Done
-    elif any(x in msg for x in ["payment done", "paid", "done"]):
-        users[uid]["step"] = "manual"
-        save_users(users)
-        return "Payment notification received. Please wait while our team is **checking your transaction status**..."
-
     return None
 
 # ---------------- MESSAGE HANDLERS ----------------
@@ -98,19 +89,24 @@ def get_step_reply(uid, text):
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     uid = str(message.chat.id)
+    is_admin = (message.chat.id == ADMIN_ID)
     
+    # AGAR ADMIN COMMAND BHEJ RAHA HAI TO USE LOGIC ME MAT DALO
+    if is_admin and message.text.startswith('/'):
+        return # Admin commands are handled by specific handlers below
+
     if uid not in users:
         users[uid] = {"name": message.from_user.first_name, "username": message.from_user.username, "step": "start"}
         save_users(users)
 
-    # Admin Manual Override
+    # Manual Mode handling
     if uid in manual_mode or users[uid].get("step") == "manual":
-        bot.send_message(ADMIN_ID, f"💬 **User ({uid}):** {message.text}")
+        if not is_admin:
+            bot.send_message(ADMIN_ID, f"💬 **User ({uid}):** {message.text}")
         return
 
     # Reply Logic
     reply = get_step_reply(uid, message.text)
-
     if reply:
         bot.send_chat_action(message.chat.id, "typing")
         time.sleep(1.5)
@@ -124,11 +120,11 @@ def admin_reply(message):
     try:
         data = message.text.split(" ", 2)
         target_uid, msg_text = data[1], data[2]
-        manual_mode[target_uid] = True
+        manual_mode[target_uid] = True # AI band karein
         bot.send_message(target_uid, msg_text)
-        bot.send_message(ADMIN_ID, f"✅ Sent to {target_uid}. AI Disabled.")
+        bot.send_message(ADMIN_ID, f"✅ Message sent to {target_uid}. AI is now DISABLED for this user.")
     except:
-        bot.send_message(ADMIN_ID, "❌ /reply [user_id] [msg]")
+        bot.send_message(ADMIN_ID, "❌ Format galat hai! Use: `/reply [User_ID] [Message]`")
 
 @bot.message_handler(commands=['auto'])
 def set_auto(message):
@@ -138,10 +134,10 @@ def set_auto(message):
         if uid in manual_mode: del manual_mode[uid]
         users[uid]["step"] = "start"
         save_users(users)
-        bot.send_message(ADMIN_ID, f"🤖 AI Enabled for {uid}.")
+        bot.send_message(ADMIN_ID, f"🤖 AI Enabled for {uid}. Bot ab khud reply dega.")
     except:
-        bot.send_message(ADMIN_ID, "❌ /auto [user_id]")
+        bot.send_message(ADMIN_ID, "❌ Format galat hai! Use: `/auto [User_ID]`")
 
 # ---------------- START ----------------
-print("Bot is Live...")
+print("Bot Live ho chuka hai (Admin safe mode)...")
 bot.infinity_polling()
